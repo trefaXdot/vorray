@@ -62,7 +62,6 @@
         let isUpdateScheduled = false;
         let abortController; // Для прерывания сканирования
 
-        // ИЗМЕНЕНО: Отсортированный массив стран Европы по близости к Пскову
         const EUROPE_SORTED_BY_PSKOV = [
             'LV', 'EE', 'BY', 'FI', 'LT', 'RU', 'PL', 'SE', 'UA', 'SK', 'CZ',
             'HU', 'RO', 'MD', 'NO', 'DK', 'DE', 'AT', 'RS', 'HR', 'BA', 'SI',
@@ -83,11 +82,10 @@
 
         scanBtn.addEventListener('click', async () => {
             if (scanBtn.classList.contains('stop-btn')) {
-                // Логика остановки
                 if (abortController) {
                     abortController.abort();
                 }
-                finishScan(true); // Завершаем принудительно
+                finishScan(true);
                 return;
             }
 
@@ -105,7 +103,7 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ servers }),
-                    signal: abortController.signal // Передаем сигнал для возможности отмены
+                    signal: abortController.signal
                 });
                 await processStream(response.body.getReader(), servers.length);
             } catch (error) {
@@ -132,28 +130,60 @@
             updateProgress(0, totalServers);
             progressContainer.classList.remove('hidden');
             clearBtn.disabled = true;
-            // Меняем кнопку на "Остановить"
             scanBtn.textContent = 'Остановить сканирование';
             scanBtn.classList.add('stop-btn');
         }
 
+        // ========================================================================
+        // ИЗМЕНЕННАЯ ФУНКЦИЯ ДЛЯ КОРРЕКТНОЙ ОБРАБОТКИ ПОТОКА
+        // ========================================================================
         async function processStream(reader, totalServers) {
             const decoder = new TextDecoder();
             let processedCount = 0;
-            while(true) {
+            let buffer = ''; // Буфер для хранения неполных сообщений
+
+            while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
-                const chunk = decoder.decode(value, { stream: true });
-                const events = chunk.split('\n\n').filter(e => e.startsWith('data:'));
-                for (const event of events) {
-                    processedCount++;
-                    try {
-                        const data = JSON.parse(event.substring(5));
-                        if (data.status === 'SUCCESS') {
-                           resultsBuffer.push(data);
+                if (done) {
+                    // Обрабатываем остаток в буфере, если поток завершился
+                    if (buffer.startsWith('data:')) {
+                         try {
+                            const data = JSON.parse(buffer.substring(5));
+                            if (data.status === 'SUCCESS') {
+                               resultsBuffer.push(data);
+                            }
+                        } catch (e) {
+                            console.error("Failed to parse final buffer:", buffer, e);
                         }
-                    } catch (e) { console.error("Failed to parse event:", event, e); }
+                    }
+                    break;
                 }
+
+                // Добавляем новый кусок данных в буфер
+                buffer += decoder.decode(value, { stream: true });
+
+                // Ищем разделитель полных сообщений
+                let boundary;
+                while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+                    // Извлекаем полное сообщение
+                    const message = buffer.substring(0, boundary);
+                    // Удаляем обработанное сообщение из буфера
+                    buffer = buffer.substring(boundary + 2);
+
+                    if (message.startsWith('data:')) {
+                        processedCount++;
+                        try {
+                            const data = JSON.parse(message.substring(5));
+                            if (data.status === 'SUCCESS') {
+                                resultsBuffer.push(data);
+                            }
+                        } catch (e) {
+                            console.error("Failed to parse event:", message, e);
+                        }
+                    }
+                }
+                
+                // Обновляем UI
                 updateProgress(processedCount, totalServers);
                 if (!isUpdateScheduled && resultsBuffer.length > 0) {
                     isUpdateScheduled = true;
@@ -174,7 +204,6 @@
             }
             progressContainer.classList.add('hidden');
             clearBtn.disabled = false;
-            // Возвращаем кнопку в исходное состояние
             scanBtn.textContent = 'Начать сканирование';
             scanBtn.classList.remove('stop-btn');
         }
@@ -187,7 +216,6 @@
                 const tbody = group.querySelector('tbody');
                 if (!tbody) return;
                 const rows = Array.from(tbody.querySelectorAll('tr'));
-                // Убираем заголовочный чекбокс из сортировки
                 const dataRows = rows.filter(row => row.dataset.uri);
                 dataRows.sort((a, b) => parseInt(a.dataset.latency) - parseInt(b.dataset.latency));
                 dataRows.forEach(row => tbody.appendChild(row));
@@ -201,7 +229,6 @@
                 const bIsEurope = EUROPE_COUNTRY_CODES.has(bCode);
                 if (aIsEurope && !bIsEurope) return -1; if (!aIsEurope && bIsEurope) return 1;
                 if(aIsEurope && bIsEurope) {
-                    // ИЗМЕНЕНО: Сортировка по близости к Пскову
                     return EUROPE_SORTED_BY_PSKOV.indexOf(aCode) - EUROPE_SORTED_BY_PSKOV.indexOf(bCode);
                 }
                 const aName = a.querySelector('h3').textContent.trim();
@@ -216,7 +243,6 @@
             progressBar.style.width = `${percentage}%`;
             progressStatus.textContent = `Обработано ${processed} из ${total}`;
 
-            // ВОЗВРАЩЕНО: Расчет оставшегося времени
             if (processed > 5 && processed < total) {
                 const elapsedSeconds = (Date.now() - scanStartTime) / 1000;
                 const timePerServer = elapsedSeconds / processed;

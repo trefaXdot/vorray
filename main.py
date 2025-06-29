@@ -1,149 +1,149 @@
-import pyperclip
-import requests
-import re
-from urllib.parse import quote
-import sys
 import json
 import os
+import re
+from pathlib import Path
+from urllib.parse import quote
 import concurrent.futures
-import time
 
-PSKOV_PROXIMITY_ORDER = [
-    "FI", "LV", "BY", "LT", "EE", "PL", "UA", "SE", "NO", "DE", "CZ", "SK", "HU",
-    "NL", "BE", "LU", "CH", "AT", "FR", "GB", "IE", "DK", "ES", "PT", "IT", "GR",
-    "RO", "BG", "RS", "HR", "SI", "TR", "MD", "GE", "AM", "AZ", "CA", "US",
-]
+import pyperclip
+import requests
+from requests.adapters import HTTPAdapter, Retry
+COUNTRY_MAP_FILENAME = "country_map.json"
+OUTPUT_FILENAME = "configs.txt"
+API_URL_TEMPLATE = "http://ip-api.com/json/{}?fields=status,message,country,countryCode"
+API_TIMEOUT = 5
+MAX_WORKERS = 10
+FALLBACK_SORT_CODE = "ZZZ"
+CITY_PROXIMITY_ORDER = (
+    # Прямые соседи и РФ
+    "FI", "LV", "BY", "LT", "EE",
+    # Близкая Европа
+    "PL", "UA", "SE", "NO", "DE", "CZ", "SK", "HU",
+    # Западная и Южная Европа
+    "NL", "BE", "LU", "CH", "AT", "FR", "GB", "IE", "DK",
+    "ES", "PT", "IT", "GR", "RO", "BG", "RS", "HR", "SI",
+    # Другие страны
+    "TR", "MD", "GE", "AM", "AZ", "CA", "US",
+)
 
-def load_country_map(filename="country_map.json"):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, filename)
+
+def load_country_map(filename: str) -> dict | None:
+    file_path = Path(__file__).resolve().parent / filename
+    if not file_path.exists():
+        print(f"❌ Ошибка: Файл '{filename}' не найден по пути '{file_path}'.")
+        return None
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with file_path.open('r', encoding='utf-8') as f:
             return json.load(f)
-    except FileNotFoundError:
-        print(f"❌ Файл '{filename}' не найден. Использую стандартные названия стран.")
-    except json.JSONDecodeError as e:
-        print(f"❌ Ошибка декодирования JSON: {e}")
-    except Exception as e:
-        print(f"❌ Ошибка при чтении файла '{filename}': {e}")
-    return {}
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"❌ Ошибка при чтении или парсинге файла '{filename}': {e}")
+        return None
+
 
 def get_flag_emoji(country_code: str) -> str:
     if not isinstance(country_code, str) or len(country_code) != 2 or not country_code.isalpha():
         return "🏁"
-    # Использование индексов вместо срезов для односимвольных строк немного эффективнее
+    
     offset = 0x1F1E6 - ord('A')
-    return chr(ord(country_code[0]) + offset) + chr(ord(country_code[1]) + offset)
-
-def get_country_info(ip_address: str, session: requests.Session):
-    # Передача сессии для переиспользования соединений
-    url = f'https://ipwho.is/{ip_address}'
-    params = {'fields': 'country,country_code'}
-    try:
-        # Использование сессии для выполнения запроса
-        with session.get(url, params=params, timeout=5) as response:
-            response.raise_for_status()
-            data = response.json()
-
-            if not data.get('success', False):
-                error_message = data.get('message', 'Неизвестная ошибка API')
-                print(f"❌ API ошибка для {ip_address}: {error_message}")
-                return None
-
-            return {
-                'code': data.get('country_code'),
-                'name': data.get('country')
-            }
-    except requests.exceptions.RequestException as e:
-        print(f"🌐 Сетевая ошибка для {ip_address}: {e}")
-    # Нет необходимости ловить Exception, т.к. RequestException покрывает большинство случаев
-    return None
+    return chr(ord(country_code.upper()[0]) + offset) + chr(ord(country_code.upper()[1]) + offset)
 
 
-def process_single_config(config_line: str, country_map: dict, session: requests.Session):
-    # config_line.strip() уже вызывается в run_processing, здесь можно убрать
-    ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', config_line)
+def create_requests_session() -> requests.Session:
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def process_single_config(config_line: str, country_map: dict, session: requests.Session) -> tuple[str, str]:
+    if not config_line.strip():
+        return (FALLBACK_SORT_CODE, config_line)
+
+    ip_match = re.search(r'\b((?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', config_line)
     if not ip_match:
-        # Сообщение об ошибке выводится только один раз
-        return ('ZZZ', config_line)
+        print(f"⚠️  IP не найден, оставляю как есть: {config_line[:50]}...")
+        return (FALLBACK_SORT_CODE, config_line)
 
     ip_address = ip_match.group(0)
-    base_config = config_line.split('#', 1)[0].rstrip()
-
-    country_info = get_country_info(ip_address, session)
-    if not country_info or not country_info.get('code'):
-        return ('ZZZ', config_line)
-
-    country_code = country_info['code'].upper()
-    country_name = country_map.get(country_code, country_info.get('name', 'Unknown'))
-    
-    flag = get_flag_emoji(country_code)
-    new_name = f"{flag} {country_name}"
-    encoded_name = quote(new_name)
-    
-    return country_code, f"{base_config}#{encoded_name}"
-
-def run_processing():
-    country_map = load_country_map()
-    print(f"Загружено названий стран: {len(country_map)}")
+    base_config = config_line.split('#')[0].strip()
 
     try:
-        clipboard_content = pyperclip.paste().strip()
-        if not clipboard_content:
-            print("📋 Буфер обмена пуст")
-            return
-    except Exception as e:
-        # В реальном приложении можно использовать tkinter как запасной вариант
-        print(f"❌ Ошибка доступа к буферу обмена: {e}")
-        return
+        response = session.get(API_URL_TEMPLATE.format(ip_address), timeout=API_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
 
-    # Фильтрация пустых строк
-    configs = [line for line in clipboard_content.splitlines() if line.strip()]
-    if not configs:
-        print("❌ Нет конфигов для обработки")
-        return
-
-    print(f"🔧 Найдено конфигов: {len(configs)}")
-    print("🚀 Начинаю обработку...")
-    start_time = time.time()
-    
-    processed_results = []
-    # Использование requests.Session для переиспользования TCP-соединений
-    with requests.Session() as session:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-            # Привязка future к исходной конфигурации для лучшей отладки
-            future_to_config = {
-                executor.submit(process_single_config, conf, country_map, session): conf 
-                for conf in configs
-            }
+        if data.get('status') == 'success':
+            country_code = data.get('countryCode')
+            country_name = country_map.get(country_code, data.get('country', 'Неизвестно'))
+            flag = get_flag_emoji(country_code)
+            new_name = f"{flag} {country_name}"
             
-            for i, future in enumerate(concurrent.futures.as_completed(future_to_config)):
-                config = future_to_config[future]
-                try:
-                    processed_results.append(future.result())
-                except Exception as e:
-                    print(f"⚠️ Ошибка обработки для '{config}': {e}")
-                    processed_results.append(('ZZZ', config))
-                
-                # Более точный прогресс-бар
-                if (i + 1) % 10 == 0 or (i + 1) == len(configs):
-                    print(f"⏳ Обработано: {i+1}/{len(configs)}")
+            encoded_new_name = quote(new_name)
+            new_config_line = f"{base_config}#{encoded_new_name}"
+            
+            print(f"✅  {ip_address:<15} -> {new_name}")
+            return (country_code, new_config_line)
+        else:
+            api_message = data.get('message', 'нет данных')
+            print(f"❌  API не определил страну для {ip_address:<15} ({api_message}).")
+            return (FALLBACK_SORT_CODE, config_line)
+            
+    except requests.RequestException as e:
+        print(f"❌  Ошибка сети для {ip_address:<15} ({type(e).__name__}).")
+        return (FALLBACK_SORT_CODE, config_line)
 
-    print(f"⌛ Время обработки: {time.time() - start_time:.1f} сек")
 
-    # Создание словаря для O(1) доступа к приоритетам
-    priority_map = {code: idx for idx, code in enumerate(PSKOV_PROXIMITY_ORDER)}
-    processed_results.sort(key=lambda x: (priority_map.get(x[0], float('inf')), x[0]))
+def main():
+    """Главная функция, управляющая всем процессом."""
+    country_map = load_country_map(COUNTRY_MAP_FILENAME)
+    if not country_map:
+        return
 
-    output_lines = [res[1] for res in processed_results]
-    output_filename = 'configs.txt'
-    
     try:
-        with open(output_filename, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(output_lines))
-        print(f"💾 Результаты сохранены в {output_filename}")
-    except IOError as e:
-        print(f"❌ Ошибка сохранения файла '{output_filename}': {e}")
+        clipboard_content = pyperclip.paste()
+        if not clipboard_content:
+            print("📋 Буфер обмена пуст. Скопируйте конфиги и запустите скрипт снова.")
+            return
+    except pyperclip.PyperclipException:
+        print("❌ Ошибка доступа к буферу обмена. Убедитесь, что установлена графическая среда (xclip/xsel в Linux).")
+        return
+        
+    configs = clipboard_content.strip().splitlines()
+    print(f"🔍 Найдено {len(configs)} конфигов. Начинаю обработку в {MAX_WORKERS} потоков...")
+
+    processed_results = []
+    session = create_requests_session()
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_config = {
+            executor.submit(process_single_config, conf, country_map, session): conf 
+            for conf in configs
+        }
+        for future in concurrent.futures.as_completed(future_to_config):
+            try:
+                processed_results.append(future.result())
+            except Exception as e:
+                print(f"💥 Критическая ошибка при обработке конфига: {e}")
+
+    print("\n🔄 Сортировка результатов по списку приоритета...")
+    
+    priority_map = {code: i for i, code in enumerate(CITY_PROXIMITY_ORDER)}
+    processed_results.sort(key=lambda res: (priority_map.get(res[0], float('inf')), res[0]))
+    
+    final_lines = [res[1] for res in processed_results]
+
+    if final_lines:
+        try:
+            with open(OUTPUT_FILENAME, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(final_lines))
+            print(f"\n🎉 Готово! {len(final_lines)} конфигов сохранено в файл '{OUTPUT_FILENAME}'")
+        except IOError as e:
+            print(f"\n❌ Не удалось записать результат в файл '{OUTPUT_FILENAME}': {e}")
+    else:
+        print("\n🤷‍♂️ Нет конфигов для сохранения.")
+
 
 if __name__ == "__main__":
-    run_processing()
+    main()

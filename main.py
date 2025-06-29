@@ -8,18 +8,11 @@ import os
 import concurrent.futures
 
 # СПИСОК СОРТИРОВКИ ПО БЛИЗОСТИ К ПСКОВУ
-# Редактируйте этот список, чтобы изменить приоритет стран.
-# Скрипт будет размещать конфиги в файле в том порядке, в котором указаны страны.
 PSKOV_PROXIMITY_ORDER = [
-    # Прямые соседи и РФ
-    "FI", "LV", "BY", "LT", "EE",
-    # Близкая Европа
-    "PL", "UA", "SE", "NO", "DE", "CZ", "SK", "HU",
-    # Западная и Южная Европа
-    "NL", "BE", "LU", "CH", "AT", "FR", "GB", "IE", "DK",
-    "ES", "PT", "IT", "GR", "RO", "BG", "RS", "HR", "SI",
-    # Другие страны
-    "TR", "MD", "GE", "AM", "AZ", "CA", "US",
+    "RU", "EE", "LV", "BY", "LT", "FI", "PL", "UA", "SE", "NO", "DE",
+    "CZ", "SK", "HU", "NL", "BE", "LU", "CH", "AT", "FR", "GB", "IE",
+    "DK", "ES", "PT", "IT", "GR", "RO", "BG", "RS", "HR", "SI", "TR",
+    "MD", "GE", "AM", "AZ", "CA", "US",
 ]
 
 def load_country_map(filename="country_map.json"):
@@ -45,11 +38,11 @@ def get_flag_emoji(country_code: str) -> str:
 
 def process_single_config(config_line, country_map):
     """
-    Обрабатывает ОДНУ строку конфига.
+    Обрабатывает ОДНУ строку конфига, используя стандарт индустрии — ipinfo.io.
     Возвращает кортеж (код страны, новая строка конфига) для последующей сортировки.
     """
     if not config_line.strip():
-        return ('ZZZ', config_line) # Код 'ZZZ' для сортировки пустых строк в конец
+        return ('ZZZ', config_line)
 
     ip_match = re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', config_line)
     if not ip_match:
@@ -60,13 +53,17 @@ def process_single_config(config_line, country_map):
     base_config = config_line.split('#')[0]
 
     try:
-        # Уменьшенный таймаут, т.к. запросы идут параллельно
-        response = requests.get(f'http://ip-api.com/json/{ip_address}?fields=status,message,country,countryCode', timeout=4)
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Используем самый надежный API ipinfo.io ---
+        api_url = f'https://ipinfo.io/{ip_address}/json'
+        # Добавляем стандартный User-Agent, так как ipinfo.io этого требует
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(api_url, timeout=4, headers=headers)
         response.raise_for_status()
         data = response.json()
-
-        if data.get('status') == 'success':
-            country_code = data.get('countryCode')
+        
+        # Поле с кодом страны в ответе ipinfo.io называется 'country'
+        country_code = data.get('country')
+        if country_code:
             country_name_ru = country_map.get(country_code, data.get('country', 'Неизвестно'))
             flag = get_flag_emoji(country_code)
             new_name = f"{flag} {country_name_ru}"
@@ -79,7 +76,10 @@ def process_single_config(config_line, country_map):
             print(f"❌  API не вернул страну для IP {ip_address}. Оставляю как есть.")
             return ('ZZZ', config_line)
     except requests.RequestException:
-        print(f"❌  Ошибка сети для IP {ip_address}. Оставляю как есть.")
+        print(f"❌  Ошибка сети или IP не найден для {ip_address}. Оставляю как есть.")
+        return ('ZZZ', config_line)
+    except json.JSONDecodeError:
+        print(f"❌  API вернул некорректный ответ для {ip_address}. Оставляю как есть.")
         return ('ZZZ', config_line)
 
 def run_processing():
@@ -101,9 +101,7 @@ def run_processing():
     print(f"Найдено {len(configs)} конфигов. Начинаю параллельную обработку...")
 
     processed_results = []
-    # Используем ThreadPoolExecutor для параллельного выполнения сетевых запросов
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        # Готовим задачи для каждого конфига
         future_to_config = {executor.submit(process_single_config, conf, country_map): conf for conf in configs}
         for future in concurrent.futures.as_completed(future_to_config):
             try:
@@ -113,12 +111,9 @@ def run_processing():
 
     print("\nСортировка результатов по списку приоритета...")
     
-    # Создаем словарь для быстрой O(1) проверки индекса приоритета
     priority_map = {code: i for i, code in enumerate(PSKOV_PROXIMITY_ORDER)}
-    # Сортируем: сначала по индексу в списке приоритета, затем по коду страны (алфавиту)
     processed_results.sort(key=lambda res: (priority_map.get(res[0], float('inf')), res[0]))
 
-    # Извлекаем только отсортированные строки конфигов
     final_lines = [res[1] for res in processed_results]
 
     if final_lines:
@@ -132,4 +127,3 @@ def run_processing():
 
 if __name__ == "__main__":
     run_processing()
-    # Строки, которые заставляли ждать нажатия Enter, удалены.

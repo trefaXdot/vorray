@@ -1,207 +1,175 @@
+import os
 import json
-import re
-from pathlib import Path
-from urllib.parse import quote, unquote
-import concurrent.futures
+import uuid
+import asyncio
+import aiohttp
+from flask import Flask, request, jsonify, send_file, Response
 
-import pyperclip
-import requests
-from requests.adapters import HTTPAdapter, Retry
+app = Flask(__name__, static_folder='', static_url_path='')
+URLS_FILE = "urls.txt"
+FILTERS_FILE = "filters.json"
+TEMP_DIR = "temp"
 
-# --- НАСТРОЙКИ ---
-COUNTRY_MAP_FILENAME = "country_map.json"
-OUTPUT_FILENAME = "configs.txt"
-API_URL_TEMPLATE = "http://ip-api.com/json/{}?fields=status,message,country,countryCode"
-API_TIMEOUT = 5
-MAX_WORKERS = 10  # Количество одновременных запросов к API
-FALLBACK_SORT_CODE = "ZZZ"
-# Список кодов стран для сортировки по географической близости
-CITY_PROXIMITY_ORDER = (
-    # Прямые соседи и РФ
-    "RU", "FI", "LV", "BY", "LT", "EE", "PL", "UA", 
-    # Близкая Европа
-    "SE", "NO", "DE", "CZ", "SK", "HU", "MD",
-    # Западная и Южная Европа
-    "NL", "BE", "LU", "CH", "AT", "FR", "GB", "IE", "DK",
-    "ES", "PT", "IT", "GR", "RO", "BG", "RS", "HR", "SI",
-    # Другие страны
-    "TR", "GE", "AM", "AZ", "CA", "US", "HK", "JP", "SG"
-)
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
+if not os.path.exists(URLS_FILE):
+    with open(URLS_FILE, "w") as f:
+        pass
 
-
-def load_maps(filename: str) -> tuple[dict, dict, str] | None:
-    """Загружает карту стран, обратную карту и regex-шаблон для кодов."""
-    file_path = Path(__file__).resolve().parent / filename
-    if not file_path.exists():
-        print(f"❌ Ошибка: Файл '{filename}' не найден.")
-        return None
+async def fetch_url(session, url):
     try:
-        with file_path.open('r', encoding='utf-8') as f:
-            country_map = json.load(f)
-        
-        # Карта для поиска по названию: {"германия": "DE", "франция": "FR"}
-        reverse_country_map = {name.lower(): code for code, name in country_map.items()}
-        
-        # Regex для поиска кодов стран как отдельных слов: \b(DE|FR|US)\b
-        country_codes_regex = r'\b(' + '|'.join(country_map.keys()) + r')\b'
-        
-        return country_map, reverse_country_map, country_codes_regex
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"❌ Ошибка при чтении файла '{filename}': {e}")
+        async with session.get(url, timeout=20) as response:
+            if response.status == 200:
+                return await response.text()
+            print(f"Warning: URL {url} returned status {response.status}")
+            return None
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
         return None
 
+def is_valid_config(line):
+    line = line.strip()
+    return line.startswith(("vmess://", "vless://", "trojan://", "ss://", "ssr://"))
 
-def get_flag_emoji(country_code: str) -> str:
-    """Генерирует флаг-эмодзи по двухбуквенному коду страны."""
-    if not isinstance(country_code, str) or len(country_code) != 2 or not country_code.isalpha():
-        return "🏁"
-    offset = 0x1F1E6 - ord('A')
-    return chr(ord(country_code[0]) + offset) + chr(ord(country_code[1]) + offset)
+@app.route("/")
+def serve_index():
+    return app.send_static_file("index.html")
 
+@app.route("/api/urls", methods=['GET'])
+def get_urls():
+    try:
+        with open(URLS_FILE, "r", encoding="utf-8") as f:
+            urls = f.read()
+        return jsonify(urls=urls)
+    except FileNotFoundError:
+        return jsonify(urls="")
 
-def create_requests_session() -> requests.Session:
-    """Создает сессию requests с настроенными повторными попытками."""
-    session = requests.Session()
-    retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retries, pool_maxsize=MAX_WORKERS)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+@app.route('/api/save_urls', methods=['POST'])
+def save_urls():
+    data = request.json
+    urls_text = data.get('urls', '')
+    with open(URLS_FILE, "w", encoding="utf-8") as f:
+        f.write(urls_text)
+    return jsonify(message="Список URL успешно сохранен")
 
+@app.route('/api/step1_process', methods=['POST'])
+def step1_process_and_deduplicate():
+    try:
+        with open(URLS_FILE, "r", encoding="utf-8") as f:
+            urls = [url.strip() for url in f.readlines() if url.strip()]
+        if not urls:
+            return jsonify(error="Список URL пуст. Добавьте источники."), 400
+    except FileNotFoundError:
+        return jsonify(error="Файл с URL не найден."), 500
+    result = asyncio.run(process_urls_async(urls))
+    return jsonify(result)
 
-def process_single_config(
-    config_line: str,
-    country_map: dict,
-    reverse_country_map: dict,
-    country_codes_regex: str,
-    session: requests.Session
-) -> tuple[str, str]:
-    """
-    Обрабатывает одну строку конфигурации, применяя новую логику.
-    Приоритет 1: Поиск страны в названии.
-    Приоритет 2: Поиск страны по IP через API.
-    """
-    if not config_line.strip():
-        return FALLBACK_SORT_CODE, config_line
+async def process_urls_async(urls):
+    all_configs_raw = set()
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_url(session, url) for url in urls]
+        results = await asyncio.gather(*tasks)
+        
+        for content in results:
+            if content:
+                for line in content.splitlines():
+                    if is_valid_config(line):
+                        all_configs_raw.add(line.strip())
+    
+    # ИЗМЕНЕНИЕ 4: Считаем общее количество до дедупликации
+    total_count = len(all_configs_raw)
 
-    parts = config_line.strip().split('#', 1)
-    base_config = parts[0]
-    remark = unquote(parts[1]) if len(parts) > 1 else ""
-    found_code = None
+    unique_configs = {}
+    for config in all_configs_raw:
+        base, *_ = config.split("#", 1)
+        if base not in unique_configs:
+            unique_configs[base] = config
 
-    # --- Приоритет 1: Ищем подсказки в названии (remark) ---
-    if remark:
-        # Сначала ищем полное название страны (например, "Германия")
-        for name_lower, code in reverse_country_map.items():
-            if re.search(r'\b' + re.escape(name_lower) + r'\b', remark, re.IGNORECASE):
-                found_code = code
+    final_list = list(unique_configs.values())
+    
+    session_id = str(uuid.uuid4())
+    temp_filepath = os.path.join(TEMP_DIR, f"{session_id}.txt")
+    with open(temp_filepath, "w", encoding="utf-8") as f:
+        f.write("\n".join(final_list))
+
+    # ИЗМЕНЕНИЕ 4: Возвращаем оба значения
+    return {
+        "sessionId": session_id,
+        "totalCount": total_count,
+        "uniqueCount": len(final_list)
+    }
+
+@app.route('/api/step2_filter', methods=['POST'])
+def step2_filter_configs():
+    data = request.json
+    session_id = data.get('sessionId')
+    filters_to_apply = data.get('filters', [])
+    
+    if not session_id or not os.path.exists(os.path.join(TEMP_DIR, f"{session_id}.txt")):
+        return jsonify(error="Invalid session"), 400
+
+    with open(FILTERS_FILE, "r", encoding="utf-8") as f:
+        all_filters = json.load(f)
+    
+    patterns_to_remove = []
+    for f_key in filters_to_apply:
+        patterns_to_remove.extend(all_filters.get(f_key, []))
+    
+    input_filepath = os.path.join(TEMP_DIR, f"{session_id}.txt")
+    with open(input_filepath, "r", encoding="utf-8") as f:
+        configs = f.readlines()
+    
+    # ИЗМЕНЕНИЕ 4: Считаем количество до фильтрации
+    initial_count = len(configs)
+    
+    filtered_configs = []
+    for config in configs:
+        name_part = config.split("#", 1)[1] if "#" in config else ""
+        config_name_lower = name_part.lower()
+        should_remove = False
+        for pattern in patterns_to_remove:
+            if pattern in config_name_lower:
+                should_remove = True
                 break
-        
-        # Если не нашли по полному названию, ищем код страны (например, "DE")
-        if not found_code:
-            match = re.search(country_codes_regex, remark, re.IGNORECASE)
-            if match:
-                found_code = match.group(0).upper()
-
-    # Если нашли код в названии, формируем новую строку и выходим
-    if found_code and found_code in country_map:
-        country_name = country_map[found_code]
-        flag = get_flag_emoji(found_code)
-        new_name = f"{flag} {country_name}"
-        print(f"✅  Найдено в названии: '{remark[:30]}...' -> {new_name}")
-        return found_code, f"{base_config}#{quote(new_name)}"
-
-    # --- Приоритет 2: Если в названии ничего нет, ищем по IP (старый метод) ---
-    ip_match = re.search(r'@[^,:]+', base_config)
-    if not ip_match:
-        ip_match = re.search(r'\b((?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', base_config)
-    
-    if not ip_match:
-        print(f"⚠️  Ни подсказок, ни IP. Оставляю как есть: {config_line[:50]}...")
-        return FALLBACK_SORT_CODE, config_line
-        
-    ip_address = ip_match.group(0).lstrip('@')
-    
-    try:
-        response = session.get(API_URL_TEMPLATE.format(ip_address), timeout=API_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get('status') == 'success' and data.get('countryCode'):
-            country_code = data['countryCode']
-            country_name = country_map.get(country_code, data.get('country', 'Неизвестно'))
-            flag = get_flag_emoji(country_code)
-            new_name = f"{flag} {country_name}"
-            print(f"✅  Найдено по IP: {ip_address:<15} -> {new_name}")
-            return country_code, f"{base_config}#{quote(new_name)}"
-        else:
-            api_message = data.get('message', 'нет данных')
-            print(f"❌  API не определил страну для {ip_address:<15} ({api_message}).")
-            return FALLBACK_SORT_CODE, config_line
+        if not should_remove:
+            filtered_configs.append(config.strip())
             
-    except requests.RequestException as e:
-        print(f"❌  Ошибка сети для {ip_address:<15} ({type(e).__name__}).")
-        return FALLBACK_SORT_CODE, config_line
-
-
-def main():
-    """Главная функция, управляющая всем процессом."""
-    maps = load_maps(COUNTRY_MAP_FILENAME)
-    if not maps:
-        return
-    country_map, reverse_country_map, country_codes_regex = maps
-
-    try:
-        clipboard_content = pyperclip.paste()
-        if not clipboard_content:
-            print("📋 Буфер обмена пуст. Скопируйте конфиги и запустите скрипт снова.")
-            return
-    except pyperclip.PyperclipException:
-        print("❌ Ошибка доступа к буферу обмена.")
-        return
-        
-    configs = clipboard_content.strip().splitlines()
-    print(f"🔍 Найдено {len(configs)} конфигов. Начинаю обработку в {MAX_WORKERS} потоков...")
-
-    processed_results = []
-    session = create_requests_session()
+    output_filepath = os.path.join(TEMP_DIR, f"{session_id}_filtered.txt")
+    with open(output_filepath, "w", encoding="utf-8") as f:
+        f.write("\n".join(filtered_configs))
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_config = {
-            executor.submit(
-                process_single_config, 
-                conf, 
-                country_map, 
-                reverse_country_map, 
-                country_codes_regex, 
-                session
-            ): conf 
-            for conf in configs
-        }
-        for future in concurrent.futures.as_completed(future_to_config):
-            try:
-                processed_results.append(future.result())
-            except Exception as e:
-                print(f"💥 Критическая ошибка при обработке конфига: {e}")
+    # ИЗМЕНЕНИЕ 4: Возвращаем оба значения
+    return jsonify({
+        "initialCount": initial_count,
+        "finalCount": len(filtered_configs)
+    })
 
-    print("\n🔄 Сортировка результатов по списку приоритета...")
-    
-    priority_map = {code: i for i, code in enumerate(CITY_PROXIMITY_ORDER)}
-    processed_results.sort(key=lambda res: (priority_map.get(res[0], float('inf')), res[0]))
-    
-    final_lines = [res[1] for res in processed_results]
+@app.route('/api/step3_download/<session_id>', methods=['GET'])
+def step3_download_file(session_id):
+    filtered_filepath = os.path.join(TEMP_DIR, f"{session_id}_filtered.txt")
+    original_filepath = os.path.join(TEMP_DIR, f"{session_id}.txt")
 
-    if final_lines:
-        output_path = Path(__file__).resolve().parent / OUTPUT_FILENAME
+    if not os.path.exists(filtered_filepath):
+        return "File not found or session expired.", 404
+
+    with open(filtered_filepath, "r", encoding="utf-8") as f:
+        num_lines = sum(1 for line in f if line.strip())
+
+    filename = f"{num_lines}.txt"
+    
+    def generate_and_cleanup():
+        with open(filtered_filepath, "rb") as f:
+            yield from f
         try:
-            with output_path.open('w', encoding='utf-8') as f:
-                f.write('\n'.join(final_lines))
-            print(f"\n🎉 Готово! {len(final_lines)} конфигов сохранено в файл '{output_path}'")
-        except IOError as e:
-            print(f"\n❌ Не удалось записать результат в файл '{output_path}': {e}")
-    else:
-        print("\n🤷‍♂️ Нет конфигов для сохранения.")
+            os.remove(filtered_filepath)
+            if os.path.exists(original_filepath):
+                os.remove(original_filepath)
+        except OSError as e:
+            print(f"Error cleaning up files for session {session_id}: {e}")
 
+    response = Response(generate_and_cleanup(), mimetype='text/plain')
+    response.headers.set("Content-Disposition", "attachment", filename=filename)
+    return response
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5003, debug=True)

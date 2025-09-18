@@ -1,0 +1,132 @@
+@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap');
+
+:root {
+    --bg-color: #0a0a0a;
+    --grid-color: rgba(255, 255, 255, 0.07);
+    --text-primary: #e6e6e6;
+    --text-secondary: #8c8c8c;
+    --panel-bg: #141414;
+    --button-bg: #333;
+    --button-hover-bg: #444;
+    --button-text: #e0e0e0;
+    --error-color: #ff6b6b;
+    --success-color: #51cf66;
+    --accent-color: #cccccc;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Courier Prime', monospace;
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    background-image: linear-gradient(var(--grid-color) 1px, transparent 1px), linear-gradient(to right, var(--grid-color) 1px, transparent 1px);
+    background-size: 30px 30px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 2rem;
+}
+
+.container { width: 100%; max-width: 800px; display: flex; flex-direction: column; gap: 2rem; }
+.container.hidden { display: none; }
+header { text-align: center; }
+header h1 { font-size: 2.2rem; font-weight: 700; margin-bottom: .5rem; }
+header p { color: var(--text-secondary); min-height: 1.2em; }
+main { display: flex; flex-direction: column; gap: 1.5rem; }
+
+.main-buttons { flex-direction: row; justify-content: center; gap: 1.5rem; }
+.main-buttons .button-primary, .main-buttons .button-secondary { width: 100%; max-width: 300px; }
+
+#urls-list-container {
+    width: 100%; height: 50vh; min-height: 250px; background-color: var(--bg-color);
+    border: 1px solid var(--button-bg); border-radius: 8px; margin-top: 1.5rem;
+    margin-bottom: 1.5rem; overflow-y: auto; text-align: left;
+    padding: 0.5rem 0.5rem 0.5rem 0;
+}
+
+#urls-list {
+    color: var(--text-primary); font-family: 'Courier Prime', monospace; font-size: 1rem;
+    padding-left: 2.5rem;
+}
+
+#urls-list li {
+    padding: 0.6rem 0.5rem; outline: none; border-radius: 3px;
+    word-break: break-all;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+}
+#urls-list li::marker { color: var(--text-secondary); }
+
+#urls-list li:not(:last-child) { border-bottom: 1px solid var(--button-bg); }
+
+.delete-btn {
+    background: none; border: none; color: var(--text-secondary);
+    font-size: 1.5rem; font-weight: bold; line-height: 1;
+    cursor: pointer; padding: 0 0.5rem;
+    border-radius: 4px;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s, background-color 0.2s;
+}
+
+#urls-list li:hover .delete-btn {
+    visibility: visible;
+    opacity: 1;
+}
+
+.delete-btn:hover {
+    color: var(--error-color);
+    background-color: #2a2a2a;
+}
+#urls-list li.list-item--empty .delete-btn { display: none; }
+
+.url-content { 
+    flex-grow: 1; 
+    outline: none; /* ИЗМЕНЕНИЕ: Убираем рамку при фокусе на самом тексте */
+}
+
+#urls-list li:focus-within { background-color: var(--button-bg); }
+#urls-list-container::-webkit-scrollbar { width: 8px; }
+#urls-list-container::-webkit-scrollbar-track { background: var(--bg-color); border-radius: 10px; }
+#urls-list-container::-webkit-scrollbar-thumb { background-color: var(--button-bg); border-radius: 10px; border: 2px solid var(--bg-color); }
+#urls-list-container::-webkit-scrollbar-thumb:hover { background-color: var(--button-hover-bg); }
+
+.button-primary, .button-secondary {
+    padding: 1rem; font-size: 1.2rem; font-weight: 700; border: 1px solid var(--button-bg);
+    border-radius: 5px; cursor: pointer; transition: transform .1s ease, background-color .2s, opacity .2s;
+    font-family: 'Courier Prime', monospace; position: relative; color: var(--button-text); background-color: var(--button-bg);
+}
+.button-secondary { background-color: transparent; color: var(--text-secondary); }
+.button-primary:hover, .button-secondary:hover { background-color: var(--button-hover-bg); }
+.button-primary:active, .button-secondary:active { transform: scale(0.98); }
+.button-primary:disabled, .button-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+.button-primary:disabled:hover, .button-secondary:disabled:hover { background-color: var(--button-bg); transform: none; }
+.button-secondary:disabled:hover { background-color: transparent; }
+
+.filter-options { display: flex; flex-direction: column; gap: 1rem; background-color: var(--panel-bg); padding: 2rem; border-radius: 8px; }
+.checkbox-label { display: flex; align-items: center; cursor: pointer; font-size: 1.2rem; }
+.checkbox-label input { display: none; }
+.checkbox-custom { width: 25px; height: 25px; border: 2px solid var(--text-secondary); border-radius: 4px; margin-right: 1rem; display: inline-block; position: relative; transition: background-color 0.2s; }
+.checkbox-label input:checked + .checkbox-custom { background-color: var(--accent-color); border-color: var(--accent-color); }
+.checkbox-custom::after { content: '✓'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0); color: var(--bg-color); font-size: 1.2rem; font-weight: bold; transition: transform 0.2s; }
+.checkbox-label input:checked + .checkbox-custom::after { transform: translate(-50%, -50%) scale(1); }
+
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); backdrop-filter: blur(5px); display: flex; justify-content: center; align-items: center; opacity: 0; visibility: hidden; transition: opacity .3s, visibility .3s; z-index: 1000; }
+.modal-overlay:not(.hidden) { opacity: 1; visibility: visible; }
+.modal-content { background-color: var(--panel-bg); padding: 2rem; border-radius: 8px; width: 90%; max-width: 900px; text-align: center; display: flex; flex-direction: column; }
+.modal-content h2 { margin-bottom: 0.5rem; }
+#success-message { color: var(--text-primary); margin-top: 1.5rem; font-size: 1.3rem; font-weight: 700; }
+.confirm-buttons { display: flex; gap: 1rem; margin-top: 2rem; }
+.confirm-buttons .button-primary, .confirm-buttons .button-secondary { width: 100%; }
+.spinner-big { width: 60px; height: 60px; border: 5px solid rgba(255, 255, 255, 0.3); border-top-color: var(--text-primary); border-radius: 50%; margin: 1.5rem auto; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#toast-container { position: fixed; top: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 9999; }
+.toast { padding: 1rem 1.5rem; border-radius: 5px; color: var(--text-primary); background-color: #333; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); opacity: 0; transform: translateX(100%); animation: slideIn .5s forwards; font-size: 1rem; white-space: pre-line; }
+.toast.success { border-left: 4px solid var(--success-color); }
+.toast.error { border-left: 4px solid var(--error-color); }
+@keyframes slideIn { to { opacity: 1; transform: translateX(0); } }

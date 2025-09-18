@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- ИЗМЕНЕНИЕ 2: Имя вкладки -->
+    <title>VPN Configs</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M10 10 H90 L55 50 V85 L45 90 V50 L10 10 Z' fill='none' stroke='%23e6e6e6' stroke-width='8' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="toast-container"></div>
+    
+    <div class="container" id="step1-urls">
+        <header>
+            <h1>Config Processor</h1>
+            <p>Нажмите "Начать обработку" для запуска процесса по сохраненному списку URL.</p>
+        </header>
+        <main class="main-buttons">
+            <button id="manage-urls-btn" class="button-secondary">Управление списком URL</button>
+            <button id="process-btn" class="button-primary" disabled><span>Начать обработку</span></button>
+        </main>
+    </div>
+
+    <div class="container hidden" id="step2-filters">
+        <header>
+            <h1>Фильтрация</h1>
+            <p id="filter-subtitle">Найдено 0 уникальных конфигов. Выберите, что нужно удалить.</p>
+        </header>
+        <main>
+            <div class="filter-options">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="filters" value="russia">
+                    <span class="checkbox-custom"></span>
+                    Россия
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" name="filters" value="belarus">
+                    <span class="checkbox-custom"></span>
+                    Беларусь
+                </label>
+            </div>
+            <button id="filter-btn" class="button-primary"><span>Применить фильтры</span></button>
+        </main>
+    </div>
+
+    <div id="modal-urls" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2 id="modal-title">Редактирование списка URL</h2>
+            <!-- ИЗМЕНЕНИЕ 1: Замена textarea на нумерованный список -->
+            <div id="urls-list-container">
+                <ol id="urls-list"></ol>
+            </div>
+            <div class="confirm-buttons">
+                <button id="save-urls-btn" class="button-primary">Сохранить</button>
+                <button id="cancel-urls-btn" class="button-secondary">Отмена</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="modal-processing" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2 id="modal-title-processing">Идет обработка...</h2>
+            <div class="spinner-big"></div>
+            <p id="modal-status">Пожалуйста, подождите.</p>
+        </div>
+    </div>
+
+    <div id="modal-success" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2>Обработка завершена!</h2>
+            <p id="success-message">Готово 0 конфигов.</p>
+            <div class="confirm-buttons">
+                <button id="download-btn" class="button-primary">Скачать файл</button>
+                <button id="restart-btn" class="button-secondary">Начать заново</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

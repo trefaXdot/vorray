@@ -3,6 +3,7 @@ import json
 import uuid
 import asyncio
 import aiohttp
+import base64
 from flask import Flask, request, jsonify, send_file, Response
 
 app = Flask(__name__, static_folder='', static_url_path='')
@@ -20,17 +21,16 @@ async def fetch_url(session, url):
     try:
         async with session.get(url, timeout=20) as response:
             if response.status == 200:
-                return await response.text()
-            print(f"Warning: URL {url} returned status {response.status}")
-            return None
+                text = await response.text()
+                return {"url": url, "content": text, "status": "ok", "code": 200}
+            return {"url": url, "content": "", "status": "error", "code": response.status}
     except Exception as e:
-        print(f"Error fetching {url}: {e}")
-        return None
+        return {"url": url, "content": "", "status": "error", "error_msg": str(e)}
 
 def is_valid_config(line):
     line = line.strip()
-    return line.startswith(("vmess://", "vless://", "trojan://", "ss://", "ssr://"))
-
+    # ДОБАВЛЕНО: socks5://, socks:// и на всякий случай wireguard://
+    return line.startswith(("vmess://", "vless://", "trojan://", "ss://", "ssr://", "hysteria2://", "hy2://", "socks5://", "socks://", "wireguard://"))
 @app.route("/")
 def serve_index():
     return app.send_static_file("index.html")
@@ -53,50 +53,100 @@ def save_urls():
     return jsonify(message="Список URL успешно сохранен")
 
 @app.route('/api/step1_process', methods=['POST'])
-def step1_process_and_deduplicate():
+def step1_process():
     try:
+        data = request.json or {}
+        # ДОБАВЛЕНО: Чтение флага дедупликации (по умолчанию True)
+        deduplicate = data.get('deduplicate', True)
+        
         with open(URLS_FILE, "r", encoding="utf-8") as f:
             urls = [url.strip() for url in f.readlines() if url.strip()]
         if not urls:
             return jsonify(error="Список URL пуст. Добавьте источники."), 400
     except FileNotFoundError:
         return jsonify(error="Файл с URL не найден."), 500
-    result = asyncio.run(process_urls_async(urls))
+    
+    result = asyncio.run(process_urls_async(urls, deduplicate))
     return jsonify(result)
 
-async def process_urls_async(urls):
-    all_configs_raw = set()
+def try_decode_base64(content):
+    content = content.strip()
+    # Если контент уже похож на конфиг (начинается с vless/vmess и т.д.), не трогаем его
+    if is_valid_config(content):
+        return content
+        
+    try:
+        # Base64 часто требует padding (символы = в конце), если длина не кратна 4
+        missing_padding = len(content) % 4
+        if missing_padding:
+            content += '=' * (4 - missing_padding)
+            
+        decoded_bytes = base64.b64decode(content)
+        decoded_str = decoded_bytes.decode('utf-8', errors='ignore')
+        return decoded_str
+    except Exception:
+        # Если произошла ошибка декодирования, возвращаем исходный текст
+        return content
+
+async def process_urls_async(urls, deduplicate):
+    collected_configs = []
+    stats = []
+
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_url(session, url) for url in urls]
         results = await asyncio.gather(*tasks)
         
-        for content in results:
-            if content:
-                for line in content.splitlines():
-                    if is_valid_config(line):
-                        all_configs_raw.add(line.strip())
+        for res in results:
+            url_stats = {
+                "url": res["url"],
+                "status": res.get("status", "error"),
+                "count": 0,
+                "msg": res.get("error_msg") or str(res.get("code", ""))
+            }
+            
+            if res["status"] == "ok" and res["content"]:
+                # Пытаемся декодировать Base64 перед разбивкой на строки
+                decoded_content = try_decode_base64(res["content"])
+                
+                # Некоторые подписки разделяют конфиги пробелами, а не переносом строки
+                # Сначала разбиваем по строкам, потом каждую строку проверяем на пробелы
+                raw_lines = decoded_content.splitlines()
+                valid_lines = []
+                
+                for raw_line in raw_lines:
+                    # Иногда в одной строке base64 может быть 'vmess://... vless://...' через пробел
+                    possible_configs = raw_line.split(' ')
+                    for item in possible_configs:
+                        if is_valid_config(item):
+                            valid_lines.append(item.strip())
+                
+                url_stats["count"] = len(valid_lines)
+                collected_configs.extend(valid_lines)
+            
+            stats.append(url_stats)
     
-    # ИЗМЕНЕНИЕ 4: Считаем общее количество до дедупликации
-    total_count = len(all_configs_raw)
+    # Логика дедупликации
+    if deduplicate:
+        unique_map = {}
+        for config in collected_configs:
+            # Ключом является часть до # (сам конфиг), значение — полная строка
+            base, *_ = config.split("#", 1)
+            if base not in unique_map:
+                unique_map[base] = config
+        final_list = list(unique_map.values())
+    else:
+        final_list = collected_configs
 
-    unique_configs = {}
-    for config in all_configs_raw:
-        base, *_ = config.split("#", 1)
-        if base not in unique_configs:
-            unique_configs[base] = config
-
-    final_list = list(unique_configs.values())
-    
     session_id = str(uuid.uuid4())
     temp_filepath = os.path.join(TEMP_DIR, f"{session_id}.txt")
     with open(temp_filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(final_list))
 
-    # ИЗМЕНЕНИЕ 4: Возвращаем оба значения
     return {
         "sessionId": session_id,
-        "totalCount": total_count,
-        "uniqueCount": len(final_list)
+        "totalFound": len(collected_configs), # Сколько всего нашли
+        "uniqueCount": len(final_list),       # Сколько осталось после обработки
+        "stats": stats                        # Детальная статистика
     }
 
 @app.route('/api/step2_filter', methods=['POST'])
@@ -119,7 +169,6 @@ def step2_filter_configs():
     with open(input_filepath, "r", encoding="utf-8") as f:
         configs = f.readlines()
     
-    # ИЗМЕНЕНИЕ 4: Считаем количество до фильтрации
     initial_count = len(configs)
     
     filtered_configs = []
@@ -138,38 +187,36 @@ def step2_filter_configs():
     with open(output_filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(filtered_configs))
     
-    # ИЗМЕНЕНИЕ 4: Возвращаем оба значения
     return jsonify({
         "initialCount": initial_count,
         "finalCount": len(filtered_configs)
     })
 
+# ДОБАВЛЕНО: Роут для получения контента (для кнопки Копировать)
+@app.route('/api/get_content/<session_id>', methods=['GET'])
+def get_content(session_id):
+    filtered_filepath = os.path.join(TEMP_DIR, f"{session_id}_filtered.txt")
+    if not os.path.exists(filtered_filepath):
+        return "Session expired", 404
+    
+    with open(filtered_filepath, "r", encoding="utf-8") as f:
+        return f.read()
+
 @app.route('/api/step3_download/<session_id>', methods=['GET'])
 def step3_download_file(session_id):
     filtered_filepath = os.path.join(TEMP_DIR, f"{session_id}_filtered.txt")
-    original_filepath = os.path.join(TEMP_DIR, f"{session_id}.txt")
-
+    
     if not os.path.exists(filtered_filepath):
         return "File not found or session expired.", 404
 
     with open(filtered_filepath, "r", encoding="utf-8") as f:
         num_lines = sum(1 for line in f if line.strip())
 
-    filename = f"{num_lines}.txt"
+    filename = f"{num_lines}_configs.txt"
     
-    def generate_and_cleanup():
-        with open(filtered_filepath, "rb") as f:
-            yield from f
-        try:
-            os.remove(filtered_filepath)
-            if os.path.exists(original_filepath):
-                os.remove(original_filepath)
-        except OSError as e:
-            print(f"Error cleaning up files for session {session_id}: {e}")
-
-    response = Response(generate_and_cleanup(), mimetype='text/plain')
-    response.headers.set("Content-Disposition", "attachment", filename=filename)
-    return response
+    # ИЗМЕНЕНО: Не удаляем файл сразу, чтобы можно было и скачать, и скопировать.
+    # Файлы перезаписываются/удаляются логикой ОС или при рестарте (опционально)
+    return send_file(filtered_filepath, as_attachment=True, download_name=filename)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5003, debug=True)

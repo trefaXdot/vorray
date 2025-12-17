@@ -39,6 +39,51 @@ main { display: flex; flex-direction: column; gap: 1.5rem; }
 .main-buttons { flex-direction: row; justify-content: center; gap: 1.5rem; }
 .main-buttons .button-primary, .main-buttons .button-secondary { width: 100%; max-width: 300px; }
 
+/* === Настройки на главной === */
+.settings-panel {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1rem;
+    padding: 1rem;
+    background: var(--panel-bg);
+    border-radius: 8px;
+}
+
+/* Toggle Switch Styles */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #333;
+    transition: .4s;
+    border-radius: 24px;
+}
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+input:checked + .slider { background-color: var(--success-color); }
+input:checked + .slider:before { transform: translateX(26px); }
+.toggle-label { color: var(--text-secondary); font-size: 0.9rem; }
+
+
+/* === Списки URL === */
 #urls-list-container {
     width: 100%; height: 50vh; min-height: 250px; background-color: var(--bg-color);
     border: 1px solid var(--button-bg); border-radius: 8px; margin-top: 1.5rem;
@@ -84,10 +129,7 @@ main { display: flex; flex-direction: column; gap: 1.5rem; }
 }
 #urls-list li.list-item--empty .delete-btn { display: none; }
 
-.url-content { 
-    flex-grow: 1; 
-    outline: none; /* ИЗМЕНЕНИЕ: Убираем рамку при фокусе на самом тексте */
-}
+.url-content { flex-grow: 1; outline: none; }
 
 #urls-list li:focus-within { background-color: var(--button-bg); }
 #urls-list-container::-webkit-scrollbar { width: 8px; }
@@ -95,18 +137,28 @@ main { display: flex; flex-direction: column; gap: 1.5rem; }
 #urls-list-container::-webkit-scrollbar-thumb { background-color: var(--button-bg); border-radius: 10px; border: 2px solid var(--bg-color); }
 #urls-list-container::-webkit-scrollbar-thumb:hover { background-color: var(--button-hover-bg); }
 
+
+/* === Кнопки === */
 .button-primary, .button-secondary {
     padding: 1rem; font-size: 1.2rem; font-weight: 700; border: 1px solid var(--button-bg);
     border-radius: 5px; cursor: pointer; transition: transform .1s ease, background-color .2s, opacity .2s;
     font-family: 'Courier Prime', monospace; position: relative; color: var(--button-text); background-color: var(--button-bg);
+    text-align: center;
 }
 .button-secondary { background-color: transparent; color: var(--text-secondary); }
 .button-primary:hover, .button-secondary:hover { background-color: var(--button-hover-bg); }
 .button-primary:active, .button-secondary:active { transform: scale(0.98); }
 .button-primary:disabled, .button-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
-.button-primary:disabled:hover, .button-secondary:disabled:hover { background-color: var(--button-bg); transform: none; }
-.button-secondary:disabled:hover { background-color: transparent; }
+.button-text-only {
+    background: none; border: none; color: var(--text-secondary); text-decoration: underline; cursor: pointer; font-family: inherit; margin-top: 10px;
+}
+.text-link-btn {
+    background: none; border: none; color: var(--accent-color); 
+    font-family: inherit; font-size: 0.9rem; cursor: pointer; 
+    margin-top: 0.5rem; text-decoration: underline;
+}
 
+/* === Фильтры === */
 .filter-options { display: flex; flex-direction: column; gap: 1rem; background-color: var(--panel-bg); padding: 2rem; border-radius: 8px; }
 .checkbox-label { display: flex; align-items: center; cursor: pointer; font-size: 1.2rem; }
 .checkbox-label input { display: none; }
@@ -115,13 +167,16 @@ main { display: flex; flex-direction: column; gap: 1.5rem; }
 .checkbox-custom::after { content: '✓'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0); color: var(--bg-color); font-size: 1.2rem; font-weight: bold; transition: transform 0.2s; }
 .checkbox-label input:checked + .checkbox-custom::after { transform: translate(-50%, -50%) scale(1); }
 
+/* === Модалки === */
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); backdrop-filter: blur(5px); display: flex; justify-content: center; align-items: center; opacity: 0; visibility: hidden; transition: opacity .3s, visibility .3s; z-index: 1000; }
 .modal-overlay:not(.hidden) { opacity: 1; visibility: visible; }
-.modal-content { background-color: var(--panel-bg); padding: 2rem; border-radius: 8px; width: 90%; max-width: 900px; text-align: center; display: flex; flex-direction: column; }
-.modal-content h2 { margin-bottom: 0.5rem; }
+.modal-content { background-color: var(--panel-bg); padding: 2rem; border-radius: 8px; width: 90%; max-width: 900px; text-align: center; display: flex; flex-direction: column; max-height: 90vh; }
+.modal-content-wide { width: 95%; max-width: 1000px; }
+
 #success-message { color: var(--text-primary); margin-top: 1.5rem; font-size: 1.3rem; font-weight: 700; }
-.confirm-buttons { display: flex; gap: 1rem; margin-top: 2rem; }
-.confirm-buttons .button-primary, .confirm-buttons .button-secondary { width: 100%; }
+.confirm-buttons { display: flex; gap: 1rem; margin-top: 2rem; justify-content: center;}
+.confirm-buttons .button-primary, .confirm-buttons .button-secondary { flex: 1; }
+
 .spinner-big { width: 60px; height: 60px; border: 5px solid rgba(255, 255, 255, 0.3); border-top-color: var(--text-primary); border-radius: 50%; margin: 1.5rem auto; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -130,3 +185,18 @@ main { display: flex; flex-direction: column; gap: 1.5rem; }
 .toast.success { border-left: 4px solid var(--success-color); }
 .toast.error { border-left: 4px solid var(--error-color); }
 @keyframes slideIn { to { opacity: 1; transform: translateX(0); } }
+
+/* === Таблица Статистики === */
+#stats-table-container {
+    margin-top: 1.5rem;
+    max-height: 60vh;
+    overflow-y: auto;
+    border: 1px solid var(--button-bg);
+    border-radius: 4px;
+}
+#stats-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem; }
+#stats-table th, #stats-table td { padding: 10px; border-bottom: 1px solid var(--button-bg); }
+#stats-table th { background-color: var(--button-bg); position: sticky; top: 0; }
+#stats-table .url-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+.status-ok { color: var(--success-color); font-weight: bold; }
+.status-error { color: var(--error-color); font-weight: bold; cursor: help; }
